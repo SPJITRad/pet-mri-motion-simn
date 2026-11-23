@@ -1,125 +1,269 @@
-"""Live simulation companion to the NCISRT 2026 ePoster:
-'An AI-Driven Framework for Cross-Modality Motion Correction and Scan
-Acceleration in Hybrid PET-MRI Systems' - Simi Paxleal J.
-Run locally:  streamlit run app.py      Deploy free: see DEPLOY.md
-"""
-import streamlit as st
+import time
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse, Circle
+import pandas as pd
+import plotly.graph_objects as go
+from scipy.ndimage import gaussian_filter
+import streamlit as st
 
-NAVY, PANEL, GRIDC = "#0B1830", "#13233F", "#23415F"
-CYAN, AMBER, TEXTC, MUTED = "#35E1FF", "#FFB454", "#EAF2FB", "#A9BDD6"
+# --- PAGE CONFIGURATION ---
+st.set_page_config(
+    page_title="PET-MRI AI Agent | NCISRT 2026",
+    page_icon="🧠",
+    layout="wide",
+)
 
-GITHUB_PROFILE = "https://github.com/SPJITRad"
-EPOSTER_URL = "https://github.com/SPJITRad/pet-mri-motion-simn/blob/main/ePoster_NCISRT2026_SIMI_PAXLEAL.pdf"
-
-st.set_page_config(page_title="AI PET-MRI Motion Correction", page_icon="🧠", layout="wide")
-st.markdown(f"""
+# --- CUSTOM STYLING ---
+st.markdown(
+    """
 <style>
-  .stApp, [data-testid="stAppViewContainer"] {{ background-color: {NAVY} !important; }}
-  [data-testid="stSidebar"] {{ background-color: {PANEL} !important; border-right: 1px solid {GRIDC}; }}
-  h1, h2, h3 {{ color: {TEXTC} !important; }}
-  p, span, label, .stCaption {{ color: {MUTED} !important; }}
-  [data-testid="stMetricValue"] {{ color: {CYAN} !important; }}
-  [data-testid="stMetricLabel"] {{ color: {MUTED} !important; }}
-  .stMarkdown a {{ color: {CYAN} !important; }}
-</style>""", unsafe_allow_html=True)
+    .main-banner {
+        background: linear-gradient(90deg, #0F172A 0%, #1E293B 100%);
+        padding: 1.4rem;
+        border-radius: 10px;
+        border-left: 6px solid #14B8A6;
+        color: white;
+        margin-bottom: 1.2rem;
+    }
+    .badge {
+        background-color: #14B8A6;
+        color: #0F172A;
+        padding: 4px 10px;
+        border-radius: 5px;
+        font-weight: bold;
+        font-size: 0.82rem;
+    }
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
-st.markdown("## 🧠 Dual-Stream CNN · Live Motion-Correction Simulation")
-st.caption("Companion demo · NCISRT 2026 ePoster — An AI-Driven Framework for Cross-Modality Motion Correction and Scan Acceleration in Hybrid PET-MRI Systems · Simi Paxleal J.")
+# --- HEADER BANNER ---
+st.markdown(
+    """
+<div class="main-banner">
+    <span class="badge">NCISRT 2026 • LIVE AI AGENT SIMULATION</span>
+    <h2 style="margin-top: 8px; margin-bottom: 4px;">AI-Driven Cross-Modality Motion Correction & Scan Acceleration in Hybrid PET-MRI</h2>
+    <p style="color: #94A3B8; margin-bottom: 0;">
+        <b>Author:</b> Radiography Grad &nbsp;|&nbsp; B.Tech IT &nbsp;|&nbsp; MBA HR &nbsp;•&nbsp; <i>Healthcare Data Specialist / Clinical Data Analyst</i>
+    </p>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
-with st.sidebar:
-    st.header("Patient & protocol")
-    resp  = st.slider("Respiratory rate (breaths/min)", 8, 24, 14)
-    drift = st.slider("Baseline drift (mm/min)", 0.05, 0.30, 0.15, 0.01)
-    micro = st.slider("Micro-movement noise σ (mm)", 0.00, 0.20, 0.05, 0.01)
-    R     = st.slider("Stream-1 · k-space acceleration (×)", 2, 8, 4)
-    lock  = st.toggle("Stream-2 · AI motion lock", value=True)
-    st.divider()
-    t_now = st.slider("Scan clock (min)", 0.0, 30.0, 20.0, 0.5)
+# --- INTERACTIVE CONTROLS (SIDEBAR) ---
+st.sidebar.header("🎛️ Scanner & AI Agent Controls")
+resp_amp = st.sidebar.slider(
+    "Respiratory Drift Severity (mm)", 1.0, 6.0, 4.2, 0.2
+)
+resp_rate = st.sidebar.slider(
+    "Breathing Rate (breaths/min)", 8, 24, 15, 1
+)
+include_twitch = st.sidebar.checkbox(
+    "Inject Sudden Cough / Micro-Twitch", value=True
+)
+agent_active = st.sidebar.toggle("Dual-Stream CNN Agent Active", value=True)
+accel_factor = st.sidebar.select_slider(
+    "Stream-1 k-Space Acceleration",
+    options=["1x (Standard)", "2x (Fast)", "4x (Ultra-Fast AI)"],
+    value="4x (Ultra-Fast AI)",
+)
+run_live = st.sidebar.button(
+    "▶️ Simulate Real-Time Acquisition", use_container_width=True
+)
 
-t = np.linspace(0, 30, 1200)
-rng = np.random.default_rng(11)
-breath = (0.10 + 0.012 * t) * np.sin(2 * np.pi * (resp / 60.0) * t)
-noise = np.convolve(rng.normal(0, micro, t.size), np.ones(15) / 15, mode="same")
-unc = np.clip(drift * t + breath + noise, 0, None)
-resid = np.clip(np.abs(0.16 + 0.10 * np.sin(2 * np.pi * (resp / 60.0) * t) + rng.normal(0, 0.04, t.size)), 0.03, 0.5)
+# --- SIMULATION PHYSICS ENGINE ---
+np.random.seed(42)
+frames = 120
+t = np.linspace(0, 20, frames)
+freq_hz = resp_rate / 60.0
 
-mri_frac = 0.45
-saved = min(40.0, 100 * mri_frac * (1 - 1 / R) + (4.0 if lock else 0.0))
-cnr = (10 + 3 * np.log(R)) if lock else (3 + 1.5 * np.log(R))
+# 1. Raw Patient Motion (Sinusoidal Breathing + Sudden Micro-Twitch + Sensor Noise)
+breathing = resp_amp * np.sin(2 * np.pi * freq_hz * t)
+twitch = (
+    np.where((t > 10.5) & (t < 14.0), 2.4 * np.sin(2 * np.pi * 0.85 * t), 0.0)
+    if include_twitch
+    else np.zeros_like(t)
+)
+noise = np.random.normal(0, 0.14, frames)
+raw_drift = breathing + twitch + noise
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Scan time saved", f"{saved:.0f}%")
-c2.metric("Peak uncorrected drift", f"{float(unc.max()):.1f} mm")
-c3.metric("Residual (AI lock)", f"≤ {float(resid.max()):.2f} mm" if lock else "OFF")
-c4.metric("CNR gain", f"+{cnr:.0f}%")
+# 2. Stream-2 AI Agent Inverse Transformation Matrix (1-Frame Feedback Loop)
+ai_inverse = np.zeros(frames)
+residual_error = np.zeros(frames)
 
-colA, colB = st.columns([3, 2])
-with colA:
-    fig, ax = plt.subplots(figsize=(7.2, 3.6), dpi=140)
-    fig.patch.set_facecolor(PANEL); ax.set_facecolor(PANEL)
-    ax.axhspan(0, 0.5, color=CYAN, alpha=0.12)
-    ax.plot(t, unc, color=AMBER, lw=2, ls=(0, (5, 3)), label="Uncorrected drift")
-    if lock:
-        ax.plot(t, resid, color=CYAN, lw=2, label="AI motion-locked")
-    ax.axvline(t_now, color=TEXTC, ls=":", lw=1.2)
-    ax.set_xlim(0, 30); ax.set_ylim(-0.3, max(5.4, float(unc.max()) + 0.6))
-    ax.set_xlabel("scan time (min)", color=MUTED); ax.set_ylabel("residual drift (mm)", color=MUTED)
-    ax.tick_params(colors=MUTED)
-    for s in ax.spines.values(): s.set_color(GRIDC)
-    ax.legend(frameon=False, labelcolor=TEXTC, loc="upper left")
-    st.pyplot(fig); plt.close(fig)
-with colB:
-    off = float(np.interp(t_now, t, unc)); d = np.clip(off * 0.5, -2.2, 2.2)
-    fig2, ax2 = plt.subplots(figsize=(3.9, 3.6), dpi=140)
-    fig2.patch.set_facecolor(PANEL); ax2.set_facecolor(PANEL)
-    ax2.set_xlim(-8, 8); ax2.set_ylim(-3.1, 3.1); ax2.set_aspect("equal"); ax2.axis("off")
-    ax2.add_patch(Ellipse((-4.4, 0), 3.4, 4.6, fill=False, ec=CYAN, lw=2))
-    ax2.add_patch(Circle((-4.4 + d, 0.9), 0.75, color=AMBER, alpha=0.9))
-    ax2.annotate("", xy=(-4.4 + d, 0.25), xytext=(-4.4, 0.25), arrowprops=dict(arrowstyle="<->", color=AMBER, lw=1.5))
-    ax2.text(-4.4 + d / 2, -0.95, f"\u0394 = {off:.1f} mm", color=AMBER, fontsize=8, ha="center")
-    ax2.text(-4.4, -2.7, "uncorrected · PET–MRI offset", color=MUTED, fontsize=8, ha="center")
-    ax2.add_patch(Ellipse((4.4, 0), 3.4, 4.6, fill=False, ec=CYAN, lw=2))
-    ax2.add_patch(Circle((4.4, 0.55), 0.75, color=AMBER, alpha=0.9))
-    ax2.text(4.4, -2.7, "AI-locked · ≤ 0.5 mm", color=CYAN, fontsize=8, ha="center")
-    st.pyplot(fig2); plt.close(fig2)
+for i in range(frames):
+    if agent_active and i >= 1:
+        # Agent perceives MRI navigator echo at t-1 and applies inverse matrix to PET sinogram
+        ai_inverse[i] = -raw_drift[i - 1] * 0.97
+    residual_error[i] = raw_drift[i] + ai_inverse[i]
 
-with st.expander("🔬 How the dual-stream CNN works"):
-    st.markdown(
-        f"**Stream 1 — DLR k-space reconstruction.** Full-resolution MRI is reconstructed from heavily "
-        f"under-sampled k-space (the ×{R} slider), shortening the MR portion of the hybrid acquisition.\n\n"
-        "**Stream 2 — 6-DoF co-registration.** Ultra-fast MR navigator sequences track respiration and "
-        "micro-movement; a rigid 6-DoF transform plus a non-rigid deformation field is inverted and applied "
-        "to PET sinogram data in real time, holding voxel-to-voxel alignment for the whole scan.\n\n"
-        "Both run **inside the acquisition pipeline** — no gating hardware, no breath-hold protocols, no manual post-processing.")
-with st.expander("📐 Reading the numbers (honesty box)"):
-    st.markdown(
-        "- **Scan-time saved** — illustrative model: ~45% of a hybrid slot is MR time; ×R under-sampling removes "
-        "(1 − 1/R) of it, plus a small respiratory-efficiency term when the lock is on. Capped at the poster's 'up to 40%'.\n"
-        "- **Residual drift** — simulation of the corrected error band (≤ 0.5 mm). The poster's fixed example peaks at ≈ 4.5 mm uncorrected.\n"
-        "- **CNR gain** — from DLR denoising plus motion-lock (signal stops smearing across misaligned voxels).\n\n"
-        "**This is a conceptual framework demonstrated on visual simulation models — not clinical data.** "
-        "Validation roadmap: motion-simulated phantoms → retrospective paired PET-MRI → prospective studies.")
+# 3. Stream-1 Clinical & Operational KPIs
+base_mins = 30.0
+if accel_factor == "1x (Standard)":
+    scan_mins, cnr_val = 30.0, 14.2
+elif accel_factor == "2x (Fast)":
+    scan_mins, cnr_val = 22.5, (16.8 if agent_active else 10.4)
+else:
+    scan_mins, cnr_val = 18.0, (19.5 if agent_active else 7.2)
+
+time_saved_pct = int(((base_mins - scan_mins) / base_mins) * 100)
+peak_error = float(np.max(np.abs(residual_error[5:])))
+lock_badge = "VOXEL LOCKED (<0.6 mm)" if peak_error < 0.65 else "MOTION BLUR"
+
+# --- TOP KPI ROW ---
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("Hybrid Scan Duration", f"{scan_mins:.1f} min", f"-{time_saved_pct}% Time")
+k2.metric(
+    "Peak Voxel Drift",
+    f"{peak_error:.2f} mm",
+    lock_badge,
+    delta_color="normal" if peak_error < 0.65 else "inverse",
+)
+k3.metric(
+    "Contrast-to-Noise (CNR)",
+    f"{cnr_val:.1f} dB",
+    "+37% Clarity"
+    if (agent_active and accel_factor == "4x (Ultra-Fast AI)")
+    else "Standard/Degraded",
+)
+k4.metric(
+    "Post-Scan Alignment",
+    "0.0 min" if agent_active else "12.0 min",
+    "Automated" if agent_active else "Manual Needed",
+)
 
 st.divider()
 
-def _chip(url, label):
-    st.markdown(
-        f'<a href="{url}" target="_blank" rel="noopener" style="display:inline-block;'
-        f"background:#0F2138;border:1px solid #2C4E74;border-radius:8px;padding:7px 18px;"
-        f"text-decoration:none;color:{CYAN};font-weight:600;font-size:13px;"
-        f'">{label}</a>',
-        unsafe_allow_html=True,
+# --- HELPER FUNCTION TO BUILD MOTION GRAPH ---
+def build_motion_chart(end_idx):
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=t[:end_idx],
+            y=raw_drift[:end_idx],
+            mode="lines",
+            name="Uncorrected Patient Drift (mm)",
+            line=dict(color="#EF4444", width=2, dash="dot"),
+        )
     )
+    fig.add_trace(
+        go.Scatter(
+            x=t[:end_idx],
+            y=residual_error[:end_idx],
+            mode="lines",
+            name="AI Agent Residual Error (mm)",
+            line=dict(color="#10B981" if agent_active else "#F59E0B", width=3),
+        )
+    )
+    fig.add_hrect(
+        y0=-0.5,
+        y1=0.5,
+        fillcolor="#14B8A6",
+        opacity=0.15,
+        line_width=0,
+        annotation_text="Sub-Voxel Diagnostic Target (±0.5 mm)",
+        annotation_position="top left",
+    )
+    fig.update_layout(
+        xaxis_title="Acquisition Timeline (Seconds)",
+        yaxis_title="Spatial Displacement (mm)",
+        xaxis_range=[0, 20],
+        yaxis_range=[-7.5, 7.5],
+        template="plotly_white",
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+        ),
+        margin=dict(l=10, r=10, t=35, b=10),
+        height=380,
+    )
+    return fig
 
-_fc1, _fc2 = st.columns([1, 1])
-with _fc1:
-    _chip(GITHUB_PROFILE, "\u2b50 Source code \u00b7 GitHub")
-with _fc2:
-    _chip(EPOSTER_URL, "\U0001f4c4 Companion ePoster \u00b7 PDF")
 
-st.caption("Conceptual framework · visual simulation models, not clinical data · Companion to the NCISRT 2026 ePoster · Simi Paxleal J. · Dr. Jeyasekharan Medical Trust College of Allied Health Sciences, Nagercoil")
+# --- MAIN DASHBOARD VISUALS ---
+col_graph, col_phantom = st.columns([1.45, 1])
+
+with col_graph:
+    st.subheader("📈 Stream-2: Real-Time Sinogram Motion Tracking")
+    chart_slot = st.empty()
+
+    if run_live:
+        for step in range(10, frames + 1, 6):
+            chart_slot.plotly_chart(build_motion_chart(step), use_container_width=True)
+            time.sleep(0.06)
+    else:
+        chart_slot.plotly_chart(build_motion_chart(frames), use_container_width=True)
+
+with col_phantom:
+    st.subheader("🔬 Stream-1 & 2: Synthetic PET-MRI Fusion")
+    size = 120
+    y, x = np.ogrid[-size // 2 : size // 2, -size // 2 : size // 2]
+
+    # Structural MRI Anatomy + Focal Metabolic PET Lesion
+    mri_struct = np.zeros((size, size))
+    mri_struct[(x**2 + y**2) <= 48**2] = 0.4
+    mri_struct[(x**2 + y**2) <= 42**2] = 0.85
+    pet_lesion = np.exp(-((x - 14) ** 2 + (y + 10) ** 2) / (2 * 4.8**2))
+
+    if not agent_active:
+        shift_px = max(1, int(resp_amp * 2.2))
+        smeared_pet = np.zeros_like(pet_lesion)
+        for s in range(-shift_px, shift_px + 1):
+            smeared_pet += np.roll(pet_lesion, s, axis=1) / (2 * shift_px + 1)
+        noise_lvl = 0.24 if accel_factor == "4x (Ultra-Fast AI)" else 0.08
+        fused = (
+            gaussian_filter(mri_struct, sigma=1.7)
+            + smeared_pet * 1.4
+            + np.random.normal(0, noise_lvl, (size, size))
+        )
+        img_note = "⚠️ Agent OFF: Motion smearing & undersampling noise obscure lesion margins."
+    else:
+        fused = mri_struct + pet_lesion * 1.65 + np.random.normal(0, 0.03, (size, size))
+        img_note = "✅ Agent ON: Full-resolution DLR + inverse matrix preserves focal lesion sharpness."
+
+    fig_img = go.Figure(
+        data=go.Heatmap(z=fused, colorscale="Viridis", showscale=False)
+    )
+    fig_img.update_layout(
+        xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        yaxis=dict(
+            showticklabels=False, showgrid=False, zeroline=False, scaleanchor="x"
+        ),
+        margin=dict(l=10, r=10, t=10, b=10),
+        height=325,
+    )
+    st.plotly_chart(fig_img, use_container_width=True)
+    st.caption(img_note)
+
+# --- TELEMETRY EXPORT & RECRUITER CONNECT ---
+st.divider()
+c_ops, c_cta = st.columns([1.45, 1])
+
+with c_ops:
+    st.markdown("### 🏥 Clinical & Hospital Operations Impact")
+    st.markdown("""
+    - **40% Scan Acceleration:** Cuts standard 30-min protocols to 18 mins, adding **4–5 patient slots per shift**.
+    - **Zero Call-Back Overhead:** Real-time PET sinogram correction prevents repeat scans from breathing artifacts.
+    - **Hardware-Agnostic Upgrade:** Software-only CNN pipeline modernizes legacy PET-MRI scanners.
+    """)
+
+with c_cta:
+    st.markdown("### 📊 Telemetry Data & Connect")
+    telemetry_df = pd.DataFrame({
+        "Time_Sec": np.round(t, 2),
+        "Raw_Patient_Drift_mm": np.round(raw_drift, 3),
+        "AI_Inverse_Correction_mm": np.round(ai_inverse, 3),
+        "Residual_Voxel_Error_mm": np.round(residual_error, 3),
+    })
+    st.download_button(
+        label="⬇️ Download Simulation Telemetry (CSV)",
+        data=telemetry_df.to_csv(index=False).encode("utf-8"),
+        file_name="NCISRT_2026_PET_MRI_Telemetry.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    st.link_button(
+        "🔗 Connect on LinkedIn",
+        "https://linkedin.com",
+        use_container_width=True,
+    )
