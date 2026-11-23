@@ -13,6 +13,9 @@ from matplotlib.patches import Ellipse, Circle
 NAVY, PANEL, GRIDC = "#0B1830", "#13233F", "#23415F"
 CYAN, AMBER, TEXTC, MUTED = "#35E1FF", "#FFB454", "#EAF2FB", "#A9BDD6"
 
+GITHUB_PROFILE = "https://github.com/SPJITRad"
+EPOSTER_URL = "https://github.com/SPJITRad/pet-mri-motion-simn/blob/main/ePoster_NCISRT2026_SIMI_PAXLEAL.pdf"
+
 st.set_page_config(page_title="AI PET-MRI Motion Correction", page_icon="🧠", layout="wide")
 st.markdown(f"""
 <style>
@@ -22,6 +25,7 @@ st.markdown(f"""
   p, span, label, .stCaption {{ color: {MUTED} !important; }}
   [data-testid="stMetricValue"] {{ color: {CYAN} !important; }}
   [data-testid="stMetricLabel"] {{ color: {MUTED} !important; }}
+  .stMarkdown a {{ color: {CYAN} !important; }}
 </style>""", unsafe_allow_html=True)
 
 st.markdown("## 🧠 Dual-Stream CNN · Live Motion-Correction Simulation")
@@ -43,7 +47,6 @@ breath = (0.10 + 0.012 * t) * np.sin(2 * np.pi * (resp / 60.0) * t)
 noise = np.convolve(rng.normal(0, micro, t.size), np.ones(15) / 15, mode="same")
 unc = np.clip(drift * t + breath + noise, 0, None)
 resid = np.clip(np.abs(0.16 + 0.10 * np.sin(2 * np.pi * (resp / 60.0) * t) + rng.normal(0, 0.04, t.size)), 0.03, 0.5)
-shown = resid if lock else unc
 
 mri_frac = 0.45
 saved = min(40.0, 100 * mri_frac * (1 - 1 / R) + (4.0 if lock else 0.0))
@@ -61,9 +64,10 @@ with colA:
     fig.patch.set_facecolor(PANEL); ax.set_facecolor(PANEL)
     ax.axhspan(0, 0.5, color=CYAN, alpha=0.12)
     ax.plot(t, unc, color=AMBER, lw=2, ls=(0, (5, 3)), label="Uncorrected drift")
-    ax.plot(t, shown, color=CYAN, lw=2, label="AI motion-locked" if lock else "AI lock OFF")
+    if lock:
+        ax.plot(t, resid, color=CYAN, lw=2, label="AI motion-locked")
     ax.axvline(t_now, color=TEXTC, ls=":", lw=1.2)
-    ax.set_xlim(0, 30); ax.set_ylim(-0.3, 5.4)
+    ax.set_xlim(0, 30); ax.set_ylim(-0.3, max(5.4, float(unc.max()) + 0.6))
     ax.set_xlabel("scan time (min)", color=MUTED); ax.set_ylabel("residual drift (mm)", color=MUTED)
     ax.tick_params(colors=MUTED)
     for s in ax.spines.values(): s.set_color(GRIDC)
@@ -77,6 +81,7 @@ with colB:
     ax2.add_patch(Ellipse((-4.4, 0), 3.4, 4.6, fill=False, ec=CYAN, lw=2))
     ax2.add_patch(Circle((-4.4 + d, 0.9), 0.75, color=AMBER, alpha=0.9))
     ax2.annotate("", xy=(-4.4 + d, 0.25), xytext=(-4.4, 0.25), arrowprops=dict(arrowstyle="<->", color=AMBER, lw=1.5))
+    ax2.text(-4.4 + d / 2, -0.95, f"\u0394 = {off:.1f} mm", color=AMBER, fontsize=8, ha="center")
     ax2.text(-4.4, -2.7, "uncorrected · PET–MRI offset", color=MUTED, fontsize=8, ha="center")
     ax2.add_patch(Ellipse((4.4, 0), 3.4, 4.6, fill=False, ec=CYAN, lw=2))
     ax2.add_patch(Circle((4.4, 0.55), 0.75, color=AMBER, alpha=0.9))
@@ -99,5 +104,22 @@ with st.expander("📐 Reading the numbers (honesty box)"):
         "- **CNR gain** — from DLR denoising plus motion-lock (signal stops smearing across misaligned voxels).\n\n"
         "**This is a conceptual framework demonstrated on visual simulation models — not clinical data.** "
         "Validation roadmap: motion-simulated phantoms → retrospective paired PET-MRI → prospective studies.")
+
+st.divider()
+
+def _chip(url, label):
+    st.markdown(
+        f'<a href="{url}" target="_blank" rel="noopener" style="display:inline-block;'
+        f"background:#0F2138;border:1px solid #2C4E74;border-radius:8px;padding:7px 18px;"
+        f"text-decoration:none;color:{CYAN};font-weight:600;font-size:13px;"
+        f'">{label}</a>',
+        unsafe_allow_html=True,
+    )
+
+_fc1, _fc2 = st.columns([1, 1])
+with _fc1:
+    _chip(GITHUB_PROFILE, "\u2b50 Source code \u00b7 GitHub")
+with _fc2:
+    _chip(EPOSTER_URL, "\U0001f4c4 Companion ePoster \u00b7 PDF")
 
 st.caption("Conceptual framework · visual simulation models, not clinical data · Companion to the NCISRT 2026 ePoster · Simi Paxleal J. · Dr. Jeyasekharan Medical Trust College of Allied Health Sciences, Nagercoil")
